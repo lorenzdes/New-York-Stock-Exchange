@@ -1,0 +1,304 @@
+---
+title: "Unsupervised learning- New York Stock Exchange"
+author: "Lorenzo de Sario"
+date: "17/8/2020"
+output:
+  pdf_document: 
+  latex_engine: xelatex
+  word_document: default
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# S&P500 companies - Fundamental indicators
+### Abstract
+How the market will be tomorrow morning? Could we reduce the relevant components of a balance sheet? Which companies are more similar if the objective is to build a robust security portfolio? Most of these questions need differents techniques chosen among supervised and unsupervised learning and differents types of data. Indeed, while supervised learning requires to build models in order to get the closest prediction to a given response (e.g. the tomorrow's price of AAPL ticker), unsupervised learnings consider just the inputs $$X_1, X_2,..., X_p$$ without taking into account if there exists output. Thus with unsupervised methods is not possible to check for accuracy measures of our results, but is included in the analysis for the purpose of identify possible patterns among the data, such as unknown subgrups and/or as a part of the exploratory data analysis with the scope of reducing dimensions of the n*p dataset before supervised methods are applied. 
+
+## Datasets and goals
+The data of fundamentals metrics of the S&P500 companies are got from Kaggle at the link  <https://www.kaggle.com/dgawlik/nyse> which makes use of the Nasdaq Financials data extended by fields of the annual annual report (Form 10-K) of the U.S. Securities and Echange Commission which provides company's financial performance. 
+The dataset provided looks at the second crisis of the 2000s (2012-2016) and is composed by 1781 observations and 77 continuous variables containing different missing values represented as NA and zeros. Each of these missings are replaced by the mean values for each variable, and for each of the 448 stocks is taken the mean among different years of each measured variable in order to check which stocks reaches similarity during the entire period taken into account. The objective of this analysis is to complete an exploratory data analysis so to prepare the data for further analysis, such as the prediction of the return on equity (ROE) for the year 2017, thus with the aim of generalize the models to future data. 
+
+* GOALS
+   + Check the density of the margins gained by the companies as a way to assess the expected relation Gross Margin > Operating Margin > Pre Tax Margin > Profit Margin ; 
+   + Determine the minimum number of principal components that are able to explain the larger cumulative proportion of variance explained by each component (PVE);
+   + Evaluate similarity between companies in terms of profittability;
+   + Compare Hierarcal clustering with differents measure of distances and different linkage methods and look at patterns when the dendogram is cutted;
+   + Compare the k-means clustering total within sum of squares of the deviations for differents random subsets.
+
+```{r Stock, echo=FALSE, message=FALSE, warning=FALSE}
+stock = read.csv("C:/Users/Lorenzo de Sario/Desktop/unsupervised/fundamentals.csv", header = TRUE, sep = ",")
+dim(stock)
+columns = c('Operating.Margin','Pre.Tax.Margin','Profit.Margin', 'Gross.Margin','Cash.Ratio', 'Current.Ratio', 'Quick.Ratio', 'Pre.Tax.Margin', 'Earnings.Before.Interest.and.Tax', 'Pre.Tax.ROE')
+summary(stock[columns])
+
+#replacing missing values with the mean for each column  
+stock[stock==0] = NA
+for(i in 1:ncol(stock)){
+  stock[is.na(stock[,i]), i] <- mean(stock[,i], na.rm = TRUE)
+}
+
+#group by Ticker symbol and take mean, removing inuseful columns 
+stock = aggregate(stock[,0:ncol(stock)], list(stock$Ticker.Symbol), mean )
+stock = stock[, -which(names(stock) %in% c('Period.Ending', 'X', 'Ticker.Symbol', 'Year'))]
+names(stock)[1] = 'Ticker'
+```
+
+## Including Plots
+
+With the scope of determine the varacity of the data analyzed, are plotted the densities of the different margins gained by the companies. Indeed, the density of the Gross Margin with respect to the Operating Margin possess much more observations for higher margins. This is due to the fact that the gross profit margin includes also the operating expenses while the gross margin consider just the direct costs (thus, Gross Margin is greather than Operating Margin). Moreover, is possible to observe that the Pre Tax Margin and the Pre Tex Margin at most overlaps (on average, taxes aren't an heavy budget item if compared with the operating costs ) and retain higher margins with respect to the Profit ones for which all the budget costs are taken into account. 
+```{r Exploratory, echo=FALSE, message=FALSE, warning=FALSE}
+#Exploratory data analysis
+library(ggplot2)
+library(reshape2)
+Margin = data.frame(stock$Operating.Margin,
+                    stock$Pre.Tax.Margin,
+                    stock$Profit.Margin,
+                    stock$Gross.Margin)
+
+Margin = melt(Margin)
+ggplot(Margin,aes(x=value, fill=variable)) + 
+  geom_density(alpha=0.25)+ 
+  labs(title = 'A check over the density of the margins', x='margin')+
+  scale_fill_discrete(name = 'Margin', labels = c('Operating Margin', 'Pre Tax Margin', 'Profit Margin', 'Gross Margin'))
+
+
+```
+
+Since the data are in different unit of measures ($ for indicators and percentage points for indexes) the data are normalized that is transformed in such a way that the variable's mean is 0 and its standard deviation (SD) is equal to 1. Moreover this task need to be performed when due to large dimensionality of the dataset, we want to reduce the number of variables with Principal Component Analysis (PCA). In particular, this is done because PCA produces projection of the data on new axis based on the SD of the features. Thus in order to let contribute all the variables with the same weight, thus with the same SD, for the calculation of the axis, a normalization is required. 
+
+```{r Normalization , echo=FALSE, message=FALSE, warning=FALSE}
+#assign ticker symbol to rowname
+row.names(stock) = (stock$Ticker)
+stock<-stock[,-1]
+```
+
+## Principal component analysis
+
+PCA is the unsupervised technique that allows to reduce the dimension of the dataset and let it be rapresented by those variables that explain its most variability along each dimension. The first Principal component, as a linear combination of p features, is given as
+$$Z_{1}= \phi_{11}X_{1} + \phi_{21}X_{2} + \phi_{31}X_{3} + .... +\phi_{p1}X_{p}$$ and captures the largest variance of the dataset, with p loadings obtained from a maximization problem constrained so as their sum of squares is equal to one (normalization). To solve this maximization problem, an eigen decomposition (singular value decomposition approach) is required. After the first principal component has been calculated, it is possible to determine the second ones as a linear combination of p variables which catch the remaining variance and is uncorrelated with $$Z_{1}$$, thus the two components will be orthogonal. Then the following principal components, up to min(n-1, p), for a n * p dataset, can be calculated in order to capture the remaining variance.  
+For further development, since the principal component analysis is frequently adopted before a predictive model is engaged, the validation set approach is required , but so to complete the prediction the PCA need to be applied to the training set and to the test set taking into account the same n components that are choosen from the training PCA. For each variable of the performed principal component on the training set is got the mean and the standard deviation and a total of ( min(448-1, 76) = ) 76 principal components with respective loading vectors are calculated starting from a correlation matrix. Moeover, is obtained the proportion of variance explained by each principal component (PVE) and the cumulative proportion of variance explained. 
+
+
+```{r Principal ,echo=FALSE, message=FALSE, warning=FALSE}
+##PRINCIPAL COMPONENT ANALYSIS
+#split in train and test since PCA is useful in the 
+#exploratory data analysis and thus it could be followed by predictive models
+stock_train = stock[1:nrow(stock),]
+stock_test = stock[-(1:nrow(stock)),]
+#Since there are indexes and economic values($): 
+#Normalize the data within 0 mean and 1 sd
+principal <- prcomp(stock_train, scale = TRUE)
+principal$center[1:10] #mean 0 of the variables 
+principal$scale[1:10] #standard deviation 1 of the variables
+principal$rotation[1:10, 1:10]
+
+b = summary(principal) 
+b$importance#in order to get a cumulative portion of variance explained by the components of 95%  consider the first 34 components.
+
+
+```
+By plotting the calculated principal components and the loading vectors in the two dimensional space, thus PC1 on the horizontal axis and PC2 on vertical, is possible to obtain the so called biplot. This plot shows how variables possess weight over the principal components (e.g Estimated.Shares.Outstanding and Sales.General.and.Administration positively correlated influence PC1, while Net.Borrowing and Investments influences PC2). Moreover is possible to notice that variables such as Net.Borrowind and Estimated.Shares.Outstanding are not correlated while Treasury.Stock and Total.Current.Liabilities presents negative correlation.
+So as to find the principal components that explain togheter the gratest amount of variance of the dataset, thus to capture as much informations from the data, is computed first the variance explained by each principal component by squaring the standard deviations and then those results are divided by the total variance explained by all the principal components in order to get proportion of variance explained by each component (PVE) (e.g. the first principal component explain the 31.5% of the variance, the second ones the 13.6%).
+Thus, by plotting the PVE explained by the components against the number of principal components is obtained a scree plot, which tell us that ~ 34 components are able to explains the 98.3% of the variance in the dataset. The results are confirmed by plotting the cumulative proportion of variance explained against the number of principal components. Thus for a possible prediction in terms of supervised methods the PCA should be executed also on the test set with the first 34 components. 
+```{r plot, echo=FALSE, message=FALSE, warning=FALSE, fig.width=12, fig.height= 12}
+
+#switch off scientific notation
+options(scipen=999, digits = 3)
+
+## biplot
+biplot(principal, scale = 0) #ensure arrows are scaled so as to represent loadings
+```
+
+```{r plot1, echo=FALSE, message=FALSE, warning=FALSE}
+#calculating the percentage of variance explained
+pr.var=principal$sdev^2
+pr.var[1:20]
+pve=pr.var/sum(pr.var)
+pve[1:20]
+#scree plot
+plot(pve, main = 'Scree plot', xlab="Principal Component", ylab="Proportion of Variance Explained", ylim=c(0,1),type='b')
+#cumulative scree plot
+plot(cumsum(pve), xlab="Principal Component", ylab="Cumulative Proportion of Variance Explained", ylim=c(0,1),type='b')
+abline(h=1, lwd=3, col="red")
+```
+## Clustering
+Clustering is the unsupervised technique adopted with the aim of discover clusters, that are partitions of the dataset into distintic groups whithin each observation appear to be similar. The main two clustering methods that are applied are the hierarchical clustering and the K-means clustering. This two methods differes for the fact that the K-means clustering requires to establish the needed number of clusters K to which assign each observations while is not required for the hierarchical procedure for which a dendogram shows how many clusters has been generated for each possible number of clusters, from 1 to n. In details, the k-means clustering generates non-nested clusters for which each observation is assigned to any cluster by minimizing the within-cluster variation (closest centroid). The within-cluster variation could be computed with measures of distances (e.g. Minkowsky distance $$ (\sum_{i=1}^n|x_i-y_i|^p)^{1/p}$$ and its applications for k = 2: Euclidean Distance, and k = 1 : City Block) between data points for numerical variables, while is needed a similiraty index (e.g. Jaccard, Russel Rao for qualitative variables) for qualitative predictors.
+
+For the hierarchical clustering, insted, each observation is treated as its own cluster and are calculated all the pairwise between-cluster dissimilarities among each i cluster. By choosing the least dissimilar pair of clusters and joining them is possible to compute the i-1 remaining dissimilarities between clusters. Note that the dissimilarity between each joined clusters represent the height in the dendogram and that the dissimilarity between two clusters for which one of them, or both, contains multiple observations, is evaluated with the linkage methods. 
+Clusters are generated from a sample of 30 stocks for demonstrative purposes on the basis of the variables that refers to profittability and to liquidity of the different companies.
+Moreover, for the purpose of this analysis, are compared the results between the complete linkage (maximum intercluster dissimilarity- largest dissimilarity between observations in the two clusters)and average linkage (average intercluster dissimilarity- average dissimilarity between observations in the two clusters) which provides more balanced dendograms; single linkage (minimum intercluster dissimilarity- smallest dissimilarity between observations in the two clusters).
+Thus, based on the profittability and liquidity variables, is possible to affirm that for different measure of distances (e.g. city block against Euclidean distance), the hierarchical clustering with complete linkage, shows that firms such as Microsoft (MSFT) and CISCO (CSCO) or also Amphenol (APH), an american producer of electronic and optic cables, and Halliburton (HAL), a oil company, presents similarity in terms of profittability and liquidity. On the numbers of clusters could be said that, with the city block distances, at an height of 5 there exists 6 clusters, while the euclidean distance claims for 2 clusters at the same height. By cutting the tree in order to obtain 6 clusters CSCO and MSFT will not belong to the same group, while APH and HAL will.
+
+On the same dataset is applied the k-mean clustering for which by adopting the minimization of the total within sum of square methods (sum of the squared deviations for each observation from the cluster centroid) are arbitrary choosen 10 clusters. Moreover, taking k = 3, the within sum of square is minimized when 50 random sets are chosen. 
+
+
+```{r Clustering,echo=FALSE, message=FALSE, warning=FALSE, fig.width=12, fig.height= 12}
+#CLUSTERING
+#hierarchical clustering
+set.seed(346)
+data = scale(stock)
+#sampling 10 stock from standardized data and selecting measures of profittability and liquidity
+sample_stock = data[sample(nrow(stock_train), 30), ]
+sample_stock = subset(sample_stock, select = c('Cash.Ratio', 'Current.Ratio', 'Quick.Ratio', 'Pre.Tax.Margin', 'Earnings.Before.Interest.and.Tax', 'Pre.Tax.ROE'))
+
+#cityblock vs euclidean distance- complete linkage
+data_cityblock = dist(sample_stock, upper = TRUE, method="manhattan")
+data_euclid = dist(sample_stock, upper = TRUE, method = 'euclidean')
+par(mfrow = c(1, 2))
+hc_b_c <- hclust(data_cityblock, method = 'complete')
+he_d <- hclust(data_euclid)
+plot(hc_b_c)
+plot(he_d)
+
+#cityblock distance with average, single and complete dissimilarity 
+#citiblock comparison since is the more robust measure of distance
+par(mfrow = c(1, 3))
+hc_b_a <- hclust(data_cityblock, method = 'average')
+hc_b_s <- hclust(data_cityblock, method = 'single')
+plot(hc_b_c)
+plot(hc_b_a)
+plot(hc_b_s)
+cutree(hc_b_a, 6)
+```
+```{r Clustering1,echo=FALSE, message=FALSE, warning=FALSE}
+#number of clusters for k-mean
+library(factoextra)
+fviz_nbclust(sample_stock, kmeans, method = "wss", k.max=20) +
+  geom_vline(xintercept = 9, linetype = 2)
+km.out = kmeans(sample_stock, 10, nstart = 50)
+km.out$tot.withinss
+km.out1 = kmeans(sample_stock, 10, nstart = 1)
+km.out1$tot.withinss
+```
+
+
+
+## Take aways-Conclusions.
+As a result from the density plots, the relation between the margin is verified, thus is possible to affirm the veracity of the data. Moreover, by performing a PCA on the training datasets it result that out of 76 components, 34 are enough to explain the most of the comulative proportion of the variance explained. 
+By the hierarchical clustering analysis notice that companies such as Microsoft (MSFT) and CISCO (CSCO) or also Amphenol (APH) are similar in terms of profittability with the city block distance either with the Euclidean distance.
+So as to state that the complete linkage method is the more balanced with respect to the single and average linkage notice that at an height of 5 still exists 6 clusters thus avoiding forcing observations to be closed each others.
+WIth respect to the k- mean clustering, an higher values of random sets will produce smallers total Within sum of squares.
+After this exploratory data analysis is now possible to make predictions with any supervised learning methods and evantually try to generalize this analysis to more recent data so to build a strong portfolio for long-term investments.
+   
+   
+   
+   
+
+
+
+## Appendix
+```{r message=FALSE, warning=FALSE, echo=TRUE, eval=FALSE}
+stock = read.csv("C:/Users/Lorenzo de Sario/Desktop/unsupervised/fundamentals.csv",
+                 header = TRUE, sep = ",")
+dim(stock)
+columns = c('Operating.Margin','Pre.Tax.Margin','Profit.Margin',
+            'Gross.Margin', 'Cash.Ratio', 'Current.Ratio',
+            'Quick.Ratio', 'Pre.Tax.Margin',
+            'Earnings.Before.Interest.and.Tax', 'Pre.Tax.ROE')
+summary(stock[columns])
+
+#replacing missing values with the mean for each column  
+stock[stock==0] = NA
+for(i in 1:ncol(stock)){
+  stock[is.na(stock[,i]), i] <- mean(stock[,i], na.rm = TRUE)
+}
+
+#group by Ticker symbol and take mean, removing inuseful columns 
+stock = aggregate(stock[,0:ncol(stock)], list(stock$Ticker.Symbol), mean )
+stock = stock[, -which(names(stock) 
+                       %in% c('Period.Ending', 'X', 'Ticker.Symbol','Year'))]
+names(stock)[1] = 'Ticker'
+
+#Exploratory data analysis
+library(ggplot2)
+library(reshape2)
+Margin = data.frame(stock$Operating.Margin,
+                    stock$Pre.Tax.Margin,
+                    stock$Profit.Margin,
+                    stock$Gross.Margin)
+
+Margin = melt(Margin)
+ggplot(Margin,aes(x=value, fill=variable)) + 
+  geom_density(alpha=0.25)+ 
+  labs(title = 'A check over the density of the margins', x='margin')+
+  scale_fill_discrete(name = 'Margin', labels = c('Operating Margin', 'Pre Tax Margin', 
+                                                  'Profit Margin', 'Gross Margin'))
+#margins differs according to the rule
+
+#assign ticker symbol to rowname
+row.names(stock) = (stock$Ticker)
+stock<-stock[,-1]
+
+##PRINCIPAL COMPONENT ANALYSIS
+#split in train and test since PCA is useful in the 
+#exploratory data analysis and thus it could be followed by predictive models
+stock_train = stock[1:nrow(stock),]
+stock_test = stock[-(1:nrow(stock)),]
+#Since there are indexes and economic values($): 
+#Normalize the data within 0 mean and 1 sd
+principal <- prcomp(stock_train, scale = TRUE)
+principal$center[1:10] #mean 0 of the variables
+principal$scale[1:10] #standard deviation 1 of the variables
+principal$rotation[1:10, 1:10]
+
+b = summary(principal) 
+b$importance#in order to get a cumulative portion of variance explained
+#by the components of 95%  consider the first 34 components.
+
+#switch off scientific notation
+options(scipen=999, digits = 3)
+
+## biplot
+biplot(principal, scale = 0) #scale = 0 ensure arrows are scaled so as to represent loadings
+#calculating the percentage of variance explained
+pr.var=principal$sdev^2
+pr.var[1:20]
+pve=pr.var/sum(pr.var)
+pve[1:20]
+#scree plot
+plot(pve, main = 'Scree plot', xlab="Principal Component",
+     ylab="Proportion of Variance Explained", ylim=c(0,1),type='b')
+#cumulative scree plot
+plot(cumsum(pve), xlab="Principal Component",
+     ylab="Cumulative Proportion of Variance Explained", ylim=c(0,1),type='b')
+abline(h=1, lwd=3, col="red")
+
+#CLUSTERING
+#hierarchical clustering
+set.seed(346)
+#sampling 10 stock from standardized data and selecting measures of profittability
+sample_stock = data[sample(nrow(stock_train), 30), ]
+sample_stock = subset(sample_stock, select = c('Cash.Ratio', 'Current.Ratio', 'Quick.Ratio',
+  'Pre.Tax.Margin', 'Earnings.Before.Interest.and.Tax', 'Pre.Tax.ROE'))
+
+#cityblock vs euclidean distance- complete linkage
+data_cityblock = dist(sample_stock, upper = TRUE, method="manhattan")
+data_euclid = dist(sample_stock, upper = TRUE, method = 'euclidean')
+par(mfrow = c(1, 2))
+hc_b_c <- hclust(data_cityblock, method = 'complete')
+he_d <- hclust(data_euclid)
+plot(hc_b_c)
+plot(he_d)
+
+#cityblock distance with average, single and complete dissimilarity 
+#citiblock comparison since is the more robust measure of distance
+par(mfrow = c(1, 3))
+hc_b_a <- hclust(data_cityblock, method = 'average')
+hc_b_s <- hclust(data_cityblock, method = 'single')
+plot(hc_b_c)
+plot(hc_b_a)
+plot(hc_b_s)
+cutree(hc_b_a, 6)
+
+#number of clusters for k-mean
+fviz_nbclust(sample_stock, kmeans, method = "wss") +
+  geom_vline(xintercept = 7, linetype = 2)+
+  labs(subtitle = "Elbow method")
+km.out = kmeans(sample_stock, 10, nstart = 50)
+km.out$tot.withinss
+km.out1 = kmeans(sample_stock, 10, nstart = 1)
+km.out1$tot.withinss
+```
+
